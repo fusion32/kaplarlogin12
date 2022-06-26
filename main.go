@@ -38,6 +38,8 @@ import (
 
 // TODO(fusion): Perhaps have these values loaded from a config file?
 const (
+	// NOTE(fusion): WorldName MUST be the same used in the server's config.lua
+	// or the client will fail to connect to the game.
 	cfgWorldName     = "Canary"
 	cfgGameHost      = "localhost"
 	cfgGamePort      = 7172
@@ -48,6 +50,16 @@ const (
 	cfgDBHost        = "localhost:3306"
 	cfgDBName        = "canary"
 	cfgDBUseTLS      = false
+
+	// NOTE(fusion): I have enabled HTTPS support but I haven't been able to test it
+	// myself and the reason is because the client seems to only accept certificates
+	// signed by a valid certificate authority so using an invalid or self-signed
+	// certificate will result in the client error "SSL handshake failed". Now instead
+	// of the client sending a "bad certificate" error back, it instantly abort the
+	// connection, causing an "EOF" error.
+	cfgUseHTTPS     = false
+	cfgHTTPSCertPEM = "local/cert.pem"
+	cfgHTTPSKeyPEM  = "local/key.pem"
 )
 
 var (
@@ -381,15 +393,6 @@ func HandleLoginRequest(w http.ResponseWriter, r *ClientRequest) {
 		return
 	}
 
-	accPremEnd := int64(0)
-	if accPremDays > 0 {
-		const oneDay = 24 * time.Hour
-		tmp := time.Now()
-		tmp.Truncate(oneDay)
-		tmp.Add(time.Duration(accPremDays) * oneDay)
-		accPremEnd = tmp.Unix()
-	}
-
 	chRows, err := dbHandle.Query(
 		"SELECT `name`, `level`, `sex`, `vocation`, `looktype`,"+
 			" `lookhead`, `lookbody`, `looklegs`, `lookfeet`, `lookaddons`,"+
@@ -452,6 +455,15 @@ func HandleLoginRequest(w http.ResponseWriter, r *ClientRequest) {
 		})
 	}
 
+	accPremEnd := int64(0)
+	if accPremDays > 0 {
+		const oneDay = 24 * time.Hour
+		tmp := time.Now()
+		tmp.Truncate(oneDay)
+		tmp.Add(time.Duration(accPremDays) * oneDay)
+		accPremEnd = tmp.Unix()
+	}
+
 	// TODO(fusion): This session key looks weird enough. Does the client
 	// expect this or does it expect an UID?
 	session := SessionInfo{
@@ -503,7 +515,9 @@ func RequestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Printf("%T: %+v\n", clRequest, clRequest)
+	// NOTE(fusion): This is for debugging only.
+	//fmt.Printf("%T: %+v\n", clRequest, clRequest)
+
 	switch clRequest.RequestType {
 	case "boostedcreature":
 		HandleBoostedCreatureRequest(w)
@@ -538,23 +552,21 @@ func main() {
 
 	fmt.Printf("Connected to database \"%v\" on \"%v\"\n", cfgDBName, cfgDBHost)
 	fmt.Printf("Database version: %v\n", dbVersion)
-	fmt.Printf("Kaplar login server running...\n")
 
 	// NOTE(fusion): Redirect everything to our handler so we don't have the default
 	// "NotFoundHandler" sending "404" messages around.
 	http.HandleFunc("/", RequestHandler)
 
-	// TODO(fusion): We should be using HTTPS but the Tibia client connection fails
-	// with "SSL handshake failed" while we fail with an "EOF" error. After some
-	// debugging it seems like the client fails right after we flush the server
-	// parameters, certificate, and finished handshake messages. We cannot conclude
-	// anything from the errors we get but it can be that the client expects a valid
-	// certificate (not self signed)?
-	//err = http.ListenAndServeTLS(":443", "local/cert.pem", "local/key.pem", nil)
+	if cfgUseHTTPS {
+		fmt.Printf("Kaplar login server (HTTPS) running...\n")
+		err = http.ListenAndServeTLS(":443", cfgHTTPSCertPEM, cfgHTTPSKeyPEM, nil)
+	} else {
+		fmt.Printf("Kaplar login server (HTTP) running...\n")
+		err = http.ListenAndServe(":80", nil)
+	}
 
-	err = http.ListenAndServe(":80", nil)
 	if err != nil {
-		fmt.Printf("HTTP server fail: %v\n", err)
+		fmt.Printf("HTTP server failed: %v\n", err)
 		return
 	}
 }
